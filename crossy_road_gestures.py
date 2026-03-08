@@ -32,7 +32,9 @@ RESTART_COOLDOWN = 0.70
 DIR_THRESHOLD = 0.75
 LR_THRESHOLD = 0.75
 
-
+# normalize vector (and its directional components) to unit length, returns (0,0) if magnitude is too small
+# this helps make direction detection more consistently regardless of hand distance from camera
+# also allows us to define a single threshold for all directions based on cosine similarity
 def unit(vx, vy):
     mag = (vx * vx + vy * vy) ** 0.5
     if mag < 1e-6:
@@ -65,10 +67,10 @@ def open_palm(lm):
     return index_ext and middle_ext and ring_ext and pinky_ext
 
 
-def point_direction(lm):
-    # use wrist -> index tip vector to determine direction
-    vx = lm[8].x - lm[0].x
-    vy = lm[8].y - lm[0].y
+def thumb_direction(lm):
+    # use wrist -> thumb tip vector to determine direction (left or right)
+    vx = lm[4].x - lm[0].x
+    vy = lm[4].y - lm[0].y
 
     ux, uy = unit(vx, vy)
 
@@ -80,9 +82,44 @@ def point_direction(lm):
     }
 
     direction = max(scores, key=scores.get)
-    return direction, scores[direction]
+    
+    # If the dominant direction is horizontal, return it
+    if direction in ("left", "right"):
+        return direction, scores[direction]
+        
+    # If the dominant direction is vertical, ignore it for the thumb
+    return "none", 0.0
+    
+def index_direction(lm):
+    # use wrist -> index tip vector
+    vx = lm[8].x - lm[5].x
+    vy = lm[8].y - lm[5].y
+    vz = lm[8].z - lm[5].z
+    
+    mag = (vx * vx + vy * vy + vz * vz) ** 0.5
+    if mag < 1e-6:  
+        return "none", 0.0
+        
+    ux = vx / mag
+    uy = vy / mag  
+    uz = vz / mag
 
+    scores = {
+        "up": -uz,
+        "down": uy,
+        "right": ux,
+        "left": -ux
+    }
 
+    direction = max(scores, key=scores.get)
+    
+    # If the dominant direction is forward or backward, return it
+    if direction in ("up", "down"):
+        return direction, scores[direction]
+        
+    # If the dominant direction is horizontal, ignore it for the index finger
+    return "none", 0.0
+    
 class Controller:
 
     def __init__(self):
@@ -148,6 +185,7 @@ def main():
 
         status = "No hand"
 
+        # Used gemini here to modify the existing loop from the previous code to work with the new direction/gesture functions
         if result.hand_landmarks:
 
             lm = result.hand_landmarks[0]
@@ -160,22 +198,29 @@ def main():
                     controller.restart()
                     status = controller.status
 
-            elif index_extended(lm):
-
-                direction, score = point_direction(lm)
-
-                threshold = DIR_THRESHOLD
-                if direction in ("left", "right"):
-                    threshold = max(DIR_THRESHOLD, LR_THRESHOLD)
-
-                status = f"POINT {direction.upper()} ({score:.2f})"
-
-                if score >= threshold and controller.can_move():
-                    controller.move(direction)
-                    status = controller.status
-
             else:
-                status = "Hand seen"
+                # 1. Calculate directions for both fingers independently
+                idx_dir, idx_score = index_direction(lm)
+                thumb_dir, thumb_score = thumb_direction(lm)
+
+                # 2. Prioritize Index finger (Forward / Backward)
+                if idx_dir in ("up", "down") and idx_score >= DIR_THRESHOLD:
+                    status = f"INDEX {idx_dir.upper()} ({idx_score:.2f})"
+                    
+                    if controller.can_move():
+                        controller.move(idx_dir)
+                        status = controller.status
+
+                # 3. If the index finger isn't triggering a move, check the Thumb (Left / Right)
+                elif thumb_dir in ("left", "right") and thumb_score >= LR_THRESHOLD:
+                    status = f"THUMB {thumb_dir.upper()} ({thumb_score:.2f})"
+                    
+                    if controller.can_move():
+                        controller.move(thumb_dir)
+                        status = controller.status
+
+                else:
+                    status = "Hand seen (Waiting for gesture)"
 
         cv2.putText(frame, status, (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8,
