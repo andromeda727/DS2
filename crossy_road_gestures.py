@@ -1,12 +1,18 @@
 ﻿"""
 crossy_road_gestures.py
 
-Custom Crossy Road gesture controls:
-- Thumb out = move left
-- Pointer finger only = move up
-- Pointer + middle finger = move down
-- Pinky only = move right
-- Open palm restarts the game (presses Enter)
+This program uses MediaPipe hand tracking to control Crossy Road
+with custom hand gestures.
+
+Gestures:
+Thumb out        -> move left
+Index finger     -> move forward
+Index + middle   -> move backward
+Pinky finger     -> move right
+Open palm        -> restart the game (press Enter)
+
+The program detects hand landmarks from the webcam and converts
+specific finger combinations into keyboard inputs using pyautogui.
 
 Requires:
 hand_landmarker.task
@@ -31,7 +37,7 @@ FRAME_W = 640
 FRAME_H = 480
 
 MOVE_COOLDOWN = 0.18
-RESTART_COOLDOWN = 0.70
+RESTART_COOLDOWN = 1.0
 
 
 def finger_extended(lm, tip_idx, pip_idx):
@@ -97,11 +103,11 @@ def pinky_only(lm):
 
 
 class Controller:
-
+    # Controller class handles sending keyboard inputs
+    # and manages cooldown timers so gestures don't repeat too quickly
     def __init__(self):
         self.last_move = 0
         self.last_restart = 0
-        self.status = "Starting..."
 
     def can_move(self):
         return time.time() - self.last_move > MOVE_COOLDOWN
@@ -144,26 +150,34 @@ def main():
     if not cap.isOpened():
         raise RuntimeError("Could not open webcam")
 
+    # Continuously reads camera frames and checks for gestures
     while True:
 
         ok, frame = cap.read()
         if not ok:
             continue
 
+        # Flip the image so movement matches what the user expects
         frame = cv2.flip(frame, 1)
 
+        # Convert image from OpenCV format (BGR) to RGB for MediaPipe
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
+        # MediaPipe requires a timestamp for video processing
         timestamp = int(time.time() * 1000)
+
+        # Run hand landmark detection on the frame
         result = hand_landmarker.detect_for_video(mp_image, timestamp)
 
         status = "No hand"
 
+        # If a hand is detected
         if result.hand_landmarks:
 
             lm = result.hand_landmarks[0]
 
+            # Open palm gesture -> restart game
             if open_palm(lm):
                 status = "Detected: PALM"
 
@@ -171,6 +185,7 @@ def main():
                     controller.restart()
                     status = controller.status
 
+            # Thumb extended -> move left
             elif thumb_out(lm):
                 status = "Detected: THUMB -> LEFT"
 
@@ -178,6 +193,7 @@ def main():
                     controller.move("left")
                     status = controller.status
 
+            # Index + middle fingers -> move down
             elif pointer_middle(lm):
                 status = "Detected: POINTER + MIDDLE -> DOWN"
 
@@ -185,6 +201,7 @@ def main():
                     controller.move("down")
                     status = controller.status
 
+            # Only index finger -> move up
             elif pointer_only(lm):
                 status = "Detected: POINTER -> UP"
 
@@ -192,6 +209,7 @@ def main():
                     controller.move("up")
                     status = controller.status
 
+            # Pinky finger -> move right
             elif pinky_only(lm):
                 status = "Detected: PINKY -> RIGHT"
 
@@ -207,10 +225,38 @@ def main():
                     (0, 255, 0), 2)
 
         cv2.putText(frame,
-                    "Thumb=Left | Pointer=Up | Pointer+Middle=Down | Pinky=Right | Palm=Restart",
-                    (10, 60),
+                    "Thumb  = Left",
+                    (10, 70),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.55,
+                    0.6,
+                    (200, 200, 200), 2)
+
+        cv2.putText(frame,
+                    "Index  = Forward",
+                    (10, 100),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (200, 200, 200), 2)
+
+        cv2.putText(frame,
+                    "Index+Middle = Back",
+                    (10, 130),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (200, 200, 200), 2)
+
+        cv2.putText(frame,
+                    "Pinky  = Right",
+                    (10, 160),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (200, 200, 200), 2)
+
+        cv2.putText(frame,
+                    "Open Palm = Restart",
+                    (10, 190),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
                     (200, 200, 200), 2)
 
         cv2.imshow("Crossy Road Gestures (ESC to quit)", frame)
